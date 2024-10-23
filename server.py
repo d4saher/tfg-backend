@@ -15,21 +15,23 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 drones = [
-    {
-        "id": 0,
-        "location": (0, 0, 0),
-        "battery": 90,
-        "streaming": False,
-        "status": "on_ground",
-        "ip": "172.16.0.240"
-    },
+    # {
+    #     "id": 0,
+    #     "name": "Drone 0",
+    #     "location": (0, 0, 0),
+    #     "battery": 90,
+    #     "streaming": False,
+    #     "status": "on_ground",
+    #     "ip": "172.16.0.240"
+    # },
     {
         "id": 1,
+        "name": "Drone 1",
         "location": (0, 0, 0),
         "battery": 90,
         "streaming": False,
         "status": "on_ground",
-        "ip": "172.16.0.241"
+        "ip": "172.16.0.103"
     }
 ]
 
@@ -221,5 +223,5 @@ def stop_stream(drone_id):
         return jsonify({"error": "Drone not found"}), 404
 
 if __name__ == '__main__':
-    start_battery_update_thread()
+    #start_battery_update_thread()
     app.run(host='0.0.0.0', port=5000, debug=True)
