@@ -1,16 +1,27 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from flask_socketio import SocketIO
+from PIL import Image
 
 import socket
 import time
 import errno
 import threading
+import os
+import cv2 as cv
+import numpy as np
 
 app = Flask(__name__)
 
 # Allow CORS
 CORS(app)
+
+CORS(app, resources={
+    r"/*": {
+        "origins": "http://172.16.0.249:5173",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    }
+})
 
 socketio = SocketIO(app, cors_allowed_origins="*")
 
@@ -34,6 +45,11 @@ drones = [
         "ip": "172.16.0.103"
     }
 ]
+
+# Map configuration
+MAP_PATH = 'testbed_maps/map1.jpg' 
+CAMERA_CALIBRATION_PATH = 'cam_parameters.npz'
+MARKER_DISTANCE_MM = 300 
 
 def api_send(host, message, port=12306, timeout=5, retries=0):
     """Sends a message to a specific host using sockets."""
@@ -103,6 +119,158 @@ def start_battery_update_thread():
     battery_thread.daemon = True  # Daemon permite que el hilo se detenga cuando se cierre la aplicación
     battery_thread.start()
 
+def load_calibration(calibration_path):
+    """Carga los parámetros de calibración de la cámara"""
+    try:
+        with np.load(calibration_path) as X:
+            camera_matrix, dist_coeffs = [X[i] for i in ('camera_matrix', 'dist_coeffs')]
+            return camera_matrix, dist_coeffs
+    except Exception as e:
+        print(f"Error cargando archivo de calibración: {e}")
+        return None, None
+
+def get_map_scale():
+    """Calcula la escala del mapa basándose en los marcadores Aruco y los parámetros de la cámara"""
+    try:
+        # Cargar parámetros de la cámara
+        calibration_file = 'tello_camera_calibration/cam_parameters.npz'
+        camera_matrix, dist_coeffs = load_calibration(CAMERA_CALIBRATION_PATH)
+        
+        if camera_matrix is None or dist_coeffs is None:
+            raise ValueError("No se pudieron cargar los parámetros de calibración")
+
+        # Cargar la imagen
+        frame = cv.imread(MAP_PATH)
+        if frame is None:
+            raise ValueError(f"No se pudo cargar la imagen del mapa: {MAP_PATH}")
+        
+        # Detectar marcadores Aruco usando la nueva API
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        aruco_dict = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_6X6_250)
+        aruco_params = cv.aruco.DetectorParameters()
+        detector = cv.aruco.ArucoDetector(aruco_dict, aruco_params)
+        corners, ids, _ = detector.detectMarkers(gray)
+        
+        if ids is None or 0 not in ids:
+            raise ValueError("No se encontró el marcador de referencia (ID 0)")
+        
+        # Estimar poses para cada marcador
+        marker_size = 9  # Tamaño del marcador en cm
+        rvecs = []
+        tvecs = []
+        
+        # Definir los puntos 3D del marcador
+        object_points = np.array([
+            [-marker_size/2, marker_size/2, 0],
+            [marker_size/2, marker_size/2, 0],
+            [marker_size/2, -marker_size/2, 0],
+            [-marker_size/2, -marker_size/2, 0]
+        ], dtype=np.float32)
+
+        for corner in corners:
+            success, rvec, tvec = cv.solvePnP(
+                objectPoints=object_points,
+                imagePoints=corner[0],
+                cameraMatrix=camera_matrix,
+                distCoeffs=dist_coeffs
+            )
+            if success:
+                rvecs.append(rvec)
+                tvecs.append(tvec)
+
+       # Encontrar el marcador 0 (referencia)
+        marker_0_idx = np.where(ids == 0)[0][0]
+        pos_0 = tvecs[marker_0_idx].flatten()
+        rvec_0 = rvecs[marker_0_idx]
+        marker_0_corners = corners[marker_0_idx][0]
+        marker_0_center = np.mean(marker_0_corners, axis=0)
+        
+        # Convertir vector de rotación a matriz
+        R_0, _ = cv.Rodrigues(rvec_0)
+        R_0_inv = R_0.T
+        
+        # Inicializar variables para los marcadores más alejados
+        max_x_distance_mm = 0
+        max_y_distance_mm = 0
+        max_x_distance_px = 0
+        max_y_distance_px = 0
+        x_marker_id = None
+        y_marker_id = None
+        
+        # Buscar los marcadores más alejados en X e Y
+        for i, marker_id in enumerate(ids):
+            if marker_id == 0:
+                continue
+            
+            # Calcular posición relativa en milímetros
+            pos_cam = tvecs[i].flatten()
+            rel_pos = pos_cam - pos_0
+            transformed_pos = np.dot(R_0_inv, rel_pos)
+            transformed_pos_mm = transformed_pos * 10  # convertir a mm
+            
+            # Calcular posición relativa en píxeles
+            marker_center = np.mean(corners[i][0], axis=0)
+            dx_px = abs(marker_center[0] - marker_0_center[0])
+            dy_px = abs(marker_center[1] - marker_0_center[1])
+            dx_mm = abs(transformed_pos_mm[0])
+            dy_mm = abs(transformed_pos_mm[1])
+            
+            if dx_mm > max_x_distance_mm:
+                max_x_distance_mm = dx_mm
+                max_x_distance_px = dx_px
+                x_marker_id = marker_id[0]
+                
+            if dy_mm > max_y_distance_mm:
+                max_y_distance_mm = dy_mm
+                max_y_distance_px = dy_px
+                y_marker_id = marker_id[0]
+        
+        # Obtener dimensiones de la imagen
+        height_px, width_px = frame.shape[:2]
+        
+        # Calcular escalas (píxeles por milímetro) usando las distancias reales
+        scale_x = max_x_distance_px / max_x_distance_mm if max_x_distance_mm > 0 else 1
+        scale_y = max_y_distance_px / max_y_distance_mm if max_y_distance_mm > 0 else 1
+
+        print(f"Distancia máxima en X: {max_x_distance_mm:.2f}mm ({max_x_distance_px:.2f}px) con marcador {x_marker_id}")
+        print(f"Distancia máxima en Y: {max_y_distance_mm:.2f}mm ({max_y_distance_px:.2f}px) con marcador {y_marker_id}")
+        print(f"Escala X: {scale_x:.2f} px/mm")
+        print(f"Escala Y: {scale_y:.2f} px/mm")
+        
+        return {
+            "dimensions": {
+                "width_px": width_px,
+                "height_px": height_px,
+                "width_mm": max_x_distance_mm,
+                "height_mm": max_y_distance_mm
+            },
+            "scale": {
+                "x": float(scale_x),  # px/mm
+                "y": float(scale_y)    # px/mm
+            },
+            "reference_markers": {
+                "origin": 0,
+                "max_x": int(x_marker_id) if x_marker_id is not None else None,
+                "max_y": int(y_marker_id) if y_marker_id is not None else None,
+                "origin_position": {
+                    "x": float(marker_0_center[0]),
+                    "y": float(marker_0_center[1])
+                }
+            },
+            "distances": {
+                "max_x": float(max_x_distance_mm),  # mm
+                "max_y": float(max_y_distance_mm),   # mm
+                "max_x_px": float(max_x_distance_px),  # px
+                "max_y_px": float(max_y_distance_px)   # px
+            }
+        }
+        
+    except Exception as e:
+        print(f"Error calculando la escala del mapa: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 # Get all drones
 @app.route('/drones', methods=['GET'])
 def get_drones():
@@ -165,12 +333,26 @@ def goto_location(drone_id):
     else:
         return jsonify({"error": "Drone not found"}), 404
 
+# Patrol
+@app.route('/drones/<int:drone_id>/patrol', methods=['POST'])
+def patrol(drone_id):
+    drone = get_drone_by_id(drone_id)
+    if drone:
+        response = api_send(drone["ip"], "patrol", port=12306, timeout=10)
+        if response:
+            drone["status"] = "on_air"
+            return jsonify({"message": "Patrol started successfully"}), 200
+        else:
+            return jsonify({"error": "Failed to communicate with drone."}), 500    
+    else:
+        return jsonify({"error": "Drone not found"}), 404
 
 # Emergency
 @app.route('/drones/<int:drone_id>/emergency', methods=['POST'])
 def emergency_drone(drone_id):
-    if drone_id in drones:
-        drones[drone_id]["status"] = "emergency"
+    drone = get_drone_by_id(drone_id)
+    if drone:
+        drone["status"] = "emergency"
         response = api_send(drone["ip"], "stop", port=12306, timeout=10)
         if response:
             drone["status"] = "on_ground"
@@ -221,6 +403,30 @@ def stop_stream(drone_id):
             return jsonify({"message": f"Drone {drone_id} has stopped streaming."})
     else:
         return jsonify({"error": "Drone not found"}), 404
+
+# Serve map image
+@app.route('/map', methods=['GET'])
+def get_map():
+    if os.path.exists(MAP_PATH):
+        return send_file(MAP_PATH, mimetype='image/jpeg')
+    else:
+        return jsonify({"error": "Map file not found"}), 404
+
+# Obtener información del mapa (dimensiones y escala)
+@app.route('/map/info', methods=['GET'])
+def get_map_info():
+    try:
+        if not os.path.exists(MAP_PATH):
+            return jsonify({"error": "Map file not found"}), 404
+            
+        scale_info = get_map_scale()
+        if scale_info is None:
+            return jsonify({"error": "Error calculating map scale"}), 500
+            
+        return jsonify(scale_info)
+        
+    except Exception as e:
+        return jsonify({"error": f"Error processing map info: {str(e)}"}), 500
 
 if __name__ == '__main__':
     #start_battery_update_thread()
