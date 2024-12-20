@@ -42,12 +42,30 @@ drones = [
         "battery": 90,
         "streaming": False,
         "status": "on_ground",
-        "ip": "172.16.0.103"
+        "ip": "172.16.0.241"
+    },
+    {
+        "id": 2,
+        "name": "Drone 2",
+        "location": (0, 0, 0),
+        "battery": 90,
+        "streaming": False,
+        "status": "on_ground",
+        "ip": "172.16.0.105"
+    },
+    {
+        "id": 3,
+        "name": "Drone 3",
+        "location": (0, 0, 0),
+        "battery": 90,
+        "streaming": False,
+        "status": "on_ground",
+        "ip": "172.16.0.106"
     }
 ]
 
 # Map configuration
-MAP_PATH = 'testbed_maps/map1.jpg' 
+MAP_PATH = 'testbed_maps/map.jpg' 
 CAMERA_CALIBRATION_PATH = 'cam_parameters.npz'
 MARKER_DISTANCE_MM = 300 
 
@@ -320,16 +338,22 @@ def land_drone(drone_id):
     else:
         return jsonify({"error": "Drone not found"}), 404
 
-# Go to
-@app.route('/drones/<int:drone_id>/goto', methods=['POST'])
+@app.route('/drones/<int:drone_id>/go_to', methods=['POST'])
 def goto_location(drone_id):
-    if drone_id in drones:
+    drone = get_drone_by_id(drone_id)
+    if drone:
         data = request.json
-        if "location" in data:
-            drones[drone_id]["location"] = data["location"]
-            return jsonify({"message": f"Drone {drone_id} is going to {data['location']}."})
+        if drone["status"] == "in_air":
+            if "location" in data:
+                response = api_send(drone["ip"], f"go_to:{data['location'][0]}, {data['location'][1]}, {data['location'][2]}", port=12306, timeout=20)
+                if response:
+                    return jsonify({"message": f"Drone {drone_id} is going to {data['location']}."})
+                else:
+                    return jsonify({"error": "Failed to send command to drone."}), 500
+            else:
+                return jsonify({"error": "Location data missing"}), 400
         else:
-            return jsonify({"error": "Location data missing"}), 400
+            return jsonify({"error": f"Drone {drone_id} is not in the air."}), 400
     else:
         return jsonify({"error": "Drone not found"}), 404
 
