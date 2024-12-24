@@ -65,7 +65,8 @@ drones = [
 ]
 
 # Map configuration
-MAP_PATH = 'testbed_maps/map.jpg' 
+#MAP_PATH = 'testbed_maps/map.jpg' 
+MAP_PATH = '/home/admin/drone-controller/original_map_big.jpg'
 CAMERA_CALIBRATION_PATH = 'cam_parameters.npz'
 MARKER_DISTANCE_MM = 300 
 
