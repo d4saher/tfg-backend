@@ -66,7 +66,8 @@ drones = [
 
 # Map configuration
 #MAP_PATH = 'testbed_maps/map.jpg' 
-MAP_PATH = '/home/admin/drone-controller/original_map_big.jpg'
+GRID_MAP_PATH = '/home/admin/drone-controller/grid_map.jpg'
+REFERENCE_MAP_PATH = '/home/admin/drone-controller/reference_map.jpg'
 CAMERA_CALIBRATION_PATH = 'cam_parameters.npz'
 MARKER_DISTANCE_MM = 300 
 
@@ -159,9 +160,9 @@ def get_map_scale():
             raise ValueError("No se pudieron cargar los parámetros de calibración")
 
         # Cargar la imagen
-        frame = cv.imread(MAP_PATH)
+        frame = cv.imread(REFERENCE_MAP_PATH)
         if frame is None:
-            raise ValueError(f"No se pudo cargar la imagen del mapa: {MAP_PATH}")
+            raise ValueError(f"No se pudo cargar la imagen del mapa: {REFERENCE_MAP_PATH}")
         
         # Detectar marcadores Aruco usando la nueva API
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
@@ -432,8 +433,8 @@ def stop_stream(drone_id):
 # Serve map image
 @app.route('/map', methods=['GET'])
 def get_map():
-    if os.path.exists(MAP_PATH):
-        return send_file(MAP_PATH, mimetype='image/jpeg')
+    if os.path.exists(GRID_MAP_PATH):
+        return send_file(GRID_MAP_PATH, mimetype='image/jpeg')
     else:
         return jsonify({"error": "Map file not found"}), 404
 
@@ -441,7 +442,7 @@ def get_map():
 @app.route('/map/info', methods=['GET'])
 def get_map_info():
     try:
-        if not os.path.exists(MAP_PATH):
+        if not os.path.exists(REFERENCE_MAP_PATH):
             return jsonify({"error": "Map file not found"}), 404
             
         scale_info = get_map_scale()
