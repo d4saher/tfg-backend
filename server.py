@@ -25,6 +25,9 @@ CORS(app, resources={
 
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+drone_controller_ip = "172.16.0.249"
+drone_controller_port = 12305
+
 drones = [
     # {
     #     "id": 0,
@@ -429,6 +432,18 @@ def stop_stream(drone_id):
             return jsonify({"message": f"Drone {drone_id} has stopped streaming."})
     else:
         return jsonify({"error": "Drone not found"}), 404
+
+# Start exploration
+@app.route('/drones/explore', methods=['POST'])
+def start_exploration():
+    response = api_send(drone_controller_ip, "explore", port=12305)
+    if response:
+        if "Error" in response:
+            return jsonify({"error": response}), 500
+        else:
+            return jsonify({"message": "Exploration started successfully"}), 200
+    else:
+        return jsonify({"error": "Failed to communicate with drone controller."}), 500
 
 # Serve map image
 @app.route('/map', methods=['GET'])
