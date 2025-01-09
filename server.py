@@ -4,12 +4,14 @@ from flask_socketio import SocketIO
 from PIL import Image
 
 import socket
+import websocket
 import time
 import errno
 import threading
 import os
 import cv2 as cv
 import numpy as np
+import json
 
 app = Flask(__name__)
 
@@ -27,45 +29,9 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 drone_controller_ip = "172.16.0.249"
 drone_controller_port = 12305
+DRONE_CONTROLLER_URL = "ws://172.16.0.249:8765"
 
-drones = [
-    # {
-    #     "id": 0,
-    #     "name": "Drone 0",
-    #     "location": (0, 0, 0),
-    #     "battery": 90,
-    #     "streaming": False,
-    #     "status": "on_ground",
-    #     "ip": "172.16.0.240"
-    # },
-    {
-        "id": 1,
-        "name": "Drone 1",
-        "location": (0, 0, 0),
-        "battery": 90,
-        "streaming": False,
-        "status": "on_ground",
-        "ip": "172.16.0.241"
-    },
-    {
-        "id": 2,
-        "name": "Drone 2",
-        "location": (0, 0, 0),
-        "battery": 90,
-        "streaming": False,
-        "status": "on_ground",
-        "ip": "172.16.0.105"
-    },
-    {
-        "id": 3,
-        "name": "Drone 3",
-        "location": (0, 0, 0),
-        "battery": 90,
-        "streaming": False,
-        "status": "on_ground",
-        "ip": "172.16.0.106"
-    }
-]
+drones = {}
 
 # Map configuration
 #MAP_PATH = 'testbed_maps/map.jpg' 
@@ -294,6 +260,66 @@ def get_map_scale():
         traceback.print_exc()
         return None
 
+def drone_controller_client():
+    """
+    Cliente WebSocket que se conecta al Drone Controller para obtener datos en tiempo real.
+    """
+
+    def on_message(ws, message):
+        global drones
+        try:
+            # Asegúrate de que el mensaje es JSON
+            if not isinstance(message, str):
+                return
+
+            data = json.loads(message)  # Intenta decodificar el mensaje como JSON
+            # print(f"Mensaje recibido: {data}")
+
+            if data.get("type") == "droneData":
+                states = data.get("data", {}).get("states", {})
+                # for drone_id, drone_data in states.items():
+                #     # Actualiza los drones en la lista global
+                #     for drone in drones:
+                #         if drone["id"] == int(drone_id):  # Convierte drone_id a int para comparar
+                #             drone.update(drone_data)
+                #             socketio.emit('drone_update', drone)  # Emite actualización
+                #             print(f"Actualizado dron {drone['id']} con datos: {drone_data}")
+        except json.JSONDecodeError as e:
+            print(f"Error decodificando mensaje JSON: {e} - Mensaje: {message}")
+        except ValueError as e:
+            print(f"Error procesando datos del mensaje: {e} - Mensaje: {message}")
+        except Exception as e:
+            print(f"Error inesperado procesando mensaje: {e}")
+
+    def on_error(ws, error):
+        print(f"WebSocket error: {error}")
+
+    def on_close(ws, close_status_code, close_msg):
+        print("Conexión WebSocket con el Drone Controller cerrada. Reintentando en 5 segundos...")
+        time.sleep(5)
+        start_drone_controller_client()
+
+    def on_open(ws):
+        print("Conexión WebSocket establecida con el Drone Controller")
+
+    # Crear y conectar el WebSocket
+    ws = websocket.WebSocketApp(
+        DRONE_CONTROLLER_URL,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
+    ws.on_open = on_open
+    ws.run_forever()
+
+def start_drone_controller_client():
+    """
+    Inicia el cliente WebSocket en un hilo separado.
+    """
+    thread = threading.Thread(target=drone_controller_client)
+    thread.daemon = True
+    thread.start()
+
 # Get all drones
 @app.route('/drones', methods=['GET'])
 def get_drones():
@@ -310,10 +336,17 @@ def get_drone_status(drone_id):
 # Takeoff
 @app.route('/drones/<int:drone_id>/takeoff', methods=['POST'])
 def takeoff_drone(drone_id):
-    drone = get_drone_by_id(drone_id)
+    print(f"Drones: {drones}")
+    # Verificar si el drone_id existe en el diccionario de drones
+    if drone_id not in drones:
+        return jsonify({"error": f"Drone with ID {drone_id} not found."}), 404
+
+    # Acceder al drone correspondiente
+    drone = drones[drone_id]
+
     if drone:
         if drone["status"] == "on_ground":
-            response = api_send(drone["ip"], "takeoff", port=12306, timeout=20)
+            response = api_send(drone_controller_ip, f"takeoff:{drone_id}", port=drone_controller_port, timeout=20)
             if response:
                 drone["status"] = "in_air"
                 socketio.emit('drone_update', drone)
@@ -331,7 +364,7 @@ def land_drone(drone_id):
     drone = get_drone_by_id(drone_id)
     if drone:
         if drone["status"] == "in_air":
-            response = api_send(drone["ip"], "land", port=12306, timeout=20)
+            response = api_send(drone_controller_ip, f"land:{drone_id}", port=drone_controller_port, timeout=20)
             if response:
                 drone["status"] = "on_ground"
                 socketio.emit('drone_update', drone)
@@ -471,4 +504,7 @@ def get_map_info():
 
 if __name__ == '__main__':
     #start_battery_update_thread()
+    # Inicia el cliente WebSocket para conectarse al Drone Controller
+    start_drone_controller_client()
+
     app.run(host='0.0.0.0', port=5000, debug=True)
