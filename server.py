@@ -277,13 +277,8 @@ def drone_controller_client():
 
             if data.get("type") == "droneData":
                 states = data.get("data", {}).get("states", {})
-                # for drone_id, drone_data in states.items():
-                #     # Actualiza los drones en la lista global
-                #     for drone in drones:
-                #         if drone["id"] == int(drone_id):  # Convierte drone_id a int para comparar
-                #             drone.update(drone_data)
-                #             socketio.emit('drone_update', drone)  # Emite actualización
-                #             print(f"Actualizado dron {drone['id']} con datos: {drone_data}")
+                drones = states
+                #print(f"Actualizados datos de drones: {drones}")
         except json.JSONDecodeError as e:
             print(f"Error decodificando mensaje JSON: {e} - Mensaje: {message}")
         except ValueError as e:
@@ -334,10 +329,9 @@ def get_drone_status(drone_id):
         return jsonify({"error": "Drone not found"}), 404
 
 # Takeoff
-@app.route('/drones/<int:drone_id>/takeoff', methods=['POST'])
+@app.route('/drones/<string:drone_id>/takeoff', methods=['POST'])
 def takeoff_drone(drone_id):
     print(f"Drones: {drones}")
-    # Verificar si el drone_id existe en el diccionario de drones
     if drone_id not in drones:
         return jsonify({"error": f"Drone with ID {drone_id} not found."}), 404
 
@@ -348,8 +342,6 @@ def takeoff_drone(drone_id):
         if drone["status"] == "on_ground":
             response = api_send(drone_controller_ip, f"takeoff:{drone_id}", port=drone_controller_port, timeout=20)
             if response:
-                drone["status"] = "in_air"
-                socketio.emit('drone_update', drone)
                 return jsonify({"message": f"Drone {drone_id} is taking off. Response: {response}"})
             else:
                 return jsonify({"error": "Failed to communicate with drone."}), 500
@@ -359,15 +351,14 @@ def takeoff_drone(drone_id):
         return jsonify({"error": "Drone not found"}), 404
 
 # Land
-@app.route('/drones/<int:drone_id>/land', methods=['POST'])
+@app.route('/drones/<string:drone_id>/land', methods=['POST'])
 def land_drone(drone_id):
-    drone = get_drone_by_id(drone_id)
+    # Acceder al drone correspondiente
+    drone = drones[drone_id]
     if drone:
         if drone["status"] == "in_air":
             response = api_send(drone_controller_ip, f"land:{drone_id}", port=drone_controller_port, timeout=20)
             if response:
-                drone["status"] = "on_ground"
-                socketio.emit('drone_update', drone)
                 return jsonify({"message": f"Drone {drone_id} is landing. Response: {response}"})
             else:
                 return jsonify({"error": "Failed to communicate with drone."}), 500
@@ -376,14 +367,15 @@ def land_drone(drone_id):
     else:
         return jsonify({"error": "Drone not found"}), 404
 
-@app.route('/drones/<int:drone_id>/go_to', methods=['POST'])
+@app.route('/drones/<string:drone_id>/go_to', methods=['POST'])
 def goto_location(drone_id):
-    drone = get_drone_by_id(drone_id)
+    # Acceder al drone correspondiente
+    drone = drones[drone_id]
     if drone:
         data = request.json
         if drone["status"] == "in_air":
             if "location" in data:
-                response = api_send(drone["ip"], f"go_to:{data['location'][0]}, {data['location'][1]}, {data['location'][2]}", port=12306, timeout=20)
+                response = api_send(drone_controller_ip, f"go_to:{drone_id},{data['location'][0]},{data['location'][1]},{data['location'][2]}", port=drone_controller_port, timeout=20)
                 if response:
                     return jsonify({"message": f"Drone {drone_id} is going to {data['location']}."})
                 else:
@@ -396,13 +388,13 @@ def goto_location(drone_id):
         return jsonify({"error": "Drone not found"}), 404
 
 # Patrol
-@app.route('/drones/<int:drone_id>/patrol', methods=['POST'])
+@app.route('/drones/<string:drone_id>/patrol', methods=['POST'])
 def patrol(drone_id):
-    drone = get_drone_by_id(drone_id)
+    drone = drones[drone_id]
     if drone:
-        response = api_send(drone["ip"], "patrol", port=12306, timeout=10)
+        response = api_send(drone_controller_ip, f"patrol:{drone_id}", port=drone_controller_port, timeout=20)
         if response:
-            drone["status"] = "on_air"
+            #drone["status"] = "on_air"
             return jsonify({"message": "Patrol started successfully"}), 200
         else:
             return jsonify({"error": "Failed to communicate with drone."}), 500    
@@ -410,14 +402,14 @@ def patrol(drone_id):
         return jsonify({"error": "Drone not found"}), 404
 
 # Emergency
-@app.route('/drones/<int:drone_id>/emergency', methods=['POST'])
+@app.route('/drones/<string:drone_id>/emergency', methods=['POST'])
 def emergency_drone(drone_id):
-    drone = get_drone_by_id(drone_id)
+    drone = drones[drone_id]
     if drone:
         drone["status"] = "emergency"
-        response = api_send(drone["ip"], "stop", port=12306, timeout=10)
+        response = api_send(drone_controller_ip, f"emergency:{drone_id}", port=drone_controller_port)
         if response:
-            drone["status"] = "on_ground"
+            #drone["status"] = "on_ground"
             socketio.emit('drone_update', drone)
             return jsonify({"message": f"Drone {drone_id} stopped. Response: {response}"})
         else:
@@ -469,12 +461,13 @@ def stop_stream(drone_id):
 # Start exploration
 @app.route('/drones/explore', methods=['POST'])
 def start_exploration():
-    response = api_send(drone_controller_ip, "explore", port=12305)
+    response = api_send(drone_controller_ip, "explore", drone_controller_port)
+    print(response)
     if response:
         if "Error" in response:
             return jsonify({"error": response}), 500
         else:
-            return jsonify({"message": "Exploration started successfully"}), 200
+            return jsonify({"message": response}), 200
     else:
         return jsonify({"error": "Failed to communicate with drone controller."}), 500
 
