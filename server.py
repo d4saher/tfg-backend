@@ -419,13 +419,27 @@ def emergency_drone(drone_id):
         return jsonify({"error": "Drone not found"}), 404
 
 # Stop
-@app.route('/drones/<int:drone_id>/stop', methods=['POST'])
+@app.route('/drones/<string:drone_id>/stop', methods=['POST'])
 def stop_drone(drone_id):
     if drone_id in drones:
         drones[drone_id]["streaming"] = False
         drones[drone_id]["status"] = "on_ground"
         return jsonify({"message": f"Drone {drone_id} has stopped."})
     else:
+        return jsonify({"error": "Drone not found"}), 404
+
+# Delete drone events
+@app.route('/drones/<string:drone_id>/events', methods=['DELETE'])
+def delete_drone_events(drone_id):
+    drone = drones[drone_id]
+    if drone:
+        response = api_send(drone_controller_ip, f"delete_events:{drone_id}", port=drone_controller_port)
+        if response:
+            return jsonify({"message": f"Events deleted for drone {drone_id}."})
+        else:
+            return jsonify({"error": "Failed to communicate with drone."}), 500
+    else:
+        print(f"Drone {drone_id} not found")
         return jsonify({"error": "Drone not found"}), 404
 
 # Start streaming
