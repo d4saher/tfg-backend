@@ -401,7 +401,7 @@ def patrol(drone_id):
     else:
         return jsonify({"error": "Drone not found"}), 404
 
-# Emergency
+# Emergency for specific drone
 @app.route('/drones/<string:drone_id>/emergency', methods=['POST'])
 def emergency_drone(drone_id):
     drone = drones[drone_id]
@@ -410,13 +410,22 @@ def emergency_drone(drone_id):
         response = api_send(drone_controller_ip, f"emergency:{drone_id}", port=drone_controller_port)
         if response:
             #drone["status"] = "on_ground"
-            socketio.emit('drone_update', drone)
+            #socketio.emit('drone_update', drone)
             return jsonify({"message": f"Drone {drone_id} stopped. Response: {response}"})
         else:
             return jsonify({"error": "Failed to communicate with drone."}), 500
         return jsonify({"message": f"Emergency triggered for drone {drone_id}."})
     else:
         return jsonify({"error": "Drone not found"}), 404
+
+# Emergency for all drones
+@app.route('/drones/emergency', methods=['POST'])
+def emergency_all():
+    response = api_send(drone_controller_ip, "emergency_all", port=drone_controller_port)
+    if response:
+        return jsonify({"message": "Emergency triggered for all drones."})
+    else:
+        return jsonify({"error": "Failed to communicate with drone controller."}), 500
 
 # Stop
 @app.route('/drones/<string:drone_id>/stop', methods=['POST'])
